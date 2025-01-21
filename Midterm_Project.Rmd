@@ -1,0 +1,362 @@
+---
+title: Midterm_project 
+author: 林育萱
+date: "`r Sys.time()`"
+output:
+  html_document:
+    highlight: pygments
+    theme: flatly
+    css: style.css
+---
+<br>
+
+### 專案說明
+1. 對交易與顧客資料進行探索，找出有利的分析特徵
+2. 找出主要的客群，並針對此客群的特徵擬定行銷方案
+
+### 資料彙整流程
+
+<center>
+![Fig-1:交易資料彙整](fig/aggregation.jpg)
+</center>
+
+<hr>
+
+### 1. 交易項目計錄：`Z`
+
+```{r setup, echo=T, message=F, cache=F, warning=F}
+rm(list=ls(all=T))
+knitr::opts_chunk$set(paged.print=FALSE, comment = NA)
+pacman::p_load(magrittr, readr, caTools, ggplot2, dplyr, vcd, plotly)
+```
+
+##### 1.1 讀進資料
+```{r}
+Z = read_csv("data/ta_feng_all_months_merged.csv") %>% 
+  data.frame %>% setNames(c(
+    "date","cust","age","area","cat","prod","qty","cost","price"))
+nrow(Z)
+```
+
+```{r}
+tibble(Z)
+```
+
+##### 日期格式轉換
+```{r fig.height=3.2, fig.width=7}
+Z$date = as.Date(Z$date, format="%m/%d/%Y")
+par(cex=0.8)
+hist(Z$date,'weeks',freq=T,las=2)
+```
+
+##### 年齡層級、郵遞區號
+```{r}
+age.group = c("<25","25-29","30-34","35-39","40-44",
+              "45-49","50-54","55-59","60-64",">65")
+Z$age = c(paste0("a",seq(24,69,5)),"a99")[match(Z$age,age.group,11)]
+Z$area = paste0("z",Z$area)
+```
+
+<center>
+![Fig-2:郵遞區號](fig/zipcode.png)
+</center>
+
+
+```{r fig.height=2.5, fig.width=7}
+par(mfrow=c(1,2),cex=0.7)
+table(Z$age, useNA='ifany') %>% barplot(main="Age Groups", las=2)
+table(Z$area,useNA='ifany') %>% barplot(main="Areas", las=2)
+```
+
+##### 處理離群值
+```{r}
+# Quantile of Variables
+sapply(Z[,7:9], quantile, prob=c(.99, .999, .9995))
+```
+
+```{r}
+# Remove Outliers
+Z = subset(Z, qty<=24 & cost<=3800 & price<=4000) 
+nrow(Z)  
+```
+
+##### 彙總訂單 Assign Transaction ID
+把每一天、每一為顧客的交易項目彙總為一張訂單
+```{r}
+Z$tid = group_indices(Z, date, cust) # same customer same day
+```
+
+##### 資料總覽
+```{r}
+# No. cust, cat, prod, tid
+sapply(Z[c("cust","cat","prod","tid")], n_distinct)
+```
+<br><hr>
+
+### 2. 交易計錄：`X`
+
+##### 交易資料彙整
+```{r}
+X = Z %>% group_by(tid) %>% summarise(
+  date = min(date),          # 交易日期  
+  cust = min(cust),          # 顧客 ID
+  age = min(age),            # 顧客 年齡級別
+  area = min(area),          # 顧客 居住區別
+  items = n(),               # 交易項目(總)數
+  pieces = sum(qty),         # 產品(總)件數
+  total = sum(price),        # 交易(總)金額
+  gross = sum(price - cost)  # 毛利
+) %>% data.frame
+nrow(X) # 119422 
+```
+
+##### 處理離群值
+```{r}
+# Check Quantile & Remove Outliers
+sapply(X[,6:9], quantile, prob=c(.999, .9995, .9999))
+```
+
+```{r}
+# Remove Outliers
+X = subset(X, items<=62 & pieces<95 & total<16000) # 119328
+```
+
+##### 交易摘要
+```{r}
+summary(X)    
+```
+
+##### 每周交易次數
+```{r fig.height=3, fig.width=7}
+par(cex=0.8)
+hist(X$date, "weeks", freq=T, las=2, main="No. Transaction per Week")
+```
+<br><hr>
+
+
+
+### 3. 顧客資料：`A`
+
+##### 顧客資料彙整
+```{r}
+d0 = max(X$date) + 1
+A = X %>% mutate(
+  days = as.integer(difftime(d0, date, units="days"))
+  ) %>% group_by(cust) %>% summarise(
+    r = min(days),      # recency
+    s = max(days),      # seniority
+    f = n(),            # frquency
+    m = mean(total),    # monetary
+    rev = sum(total),   # total revenue contribution
+    raw = sum(gross),   # total gross profit contribution
+    age = min(age),     # age group
+    area = min(area),   # area code
+  ) %>% data.frame      
+nrow(A) # 32241
+```
+
+```{r fig.height=2.5, fig.width=7.2}
+par(mfrow=c(1,2),cex=0.7)
+table(A$age, useNA='ifany') %>% barplot(main="Age Groups",las=2)
+table(A$area, useNA='ifany') %>% barplot(main="Areas",las=2)                
+```
+
+##### 顧客摘要
+```{r}
+summary(A) 
+```
+
+```{r fig.height=8}
+par(mfrow=c(3,2), mar=c(3,3,4,2))
+for(x in c('r','s','f','m')) 
+  hist(A[,x],freq=T,main=x,xlab="",ylab="",cex.main=2)
+hist(pmin(A$f,10),0:10,freq=T,xlab="",ylab="",cex.main=2)
+hist(log(A$m,10),freq=T,xlab="",ylab="",cex.main=2)
+```
+
+🌷 **偏態分佈的處理方法**
+
++ 對數轉換 - `log(A$m, 10)`
++ 固定上限 - `pmin(A$f, 10)`
+
+<br> 
+
+##### Check & Save
+```{r}
+is.na(Z) %>% colSums
+```
+
+```{r}
+is.na(X) %>% colSums
+```
+
+```{r}
+is.na(A) %>% colSums
+```
+
+```{r}
+A0 = A; X0 = X; Z0 = Z
+```
+
+確認資料沒有缺失值之後，將顧客資料存進A0，交易資料X存進X0，原始資料Z存進Z0
+
+<br><hr>
+
+### 4. 資料探索
+
+##### 年領與地理區隔的關聯性
+使用馬賽克圖檢視列連表的關聯性(Association between Categorial Variables)
+
+- 方塊大小代表該類別組合的數量
+- 紅(藍)色代表該類別組合的數量顯著小(大)於期望值
+- 期望值就是邊際機率(如上方的直條圖所示)的乘積
+- 卡方檢定(類別變數的關聯性檢定)的p值顯示在圖示最下方
+- p-value < 2.22e-16 : age 與 area 之間有顯著的關聯性
+
+```{r fig.height=6, fig.width=7.5}
+MOSA = function(formula, data) mosaic(formula, data, shade=T, 
+  margins=c(0,1,0,0), labeling_args = list(rot_labels=c(90,0,0,0)),
+  gp_labels=gpar(fontsize=9), legend_args=list(fontsize=9),
+  gp_text=gpar(fontsize=7),labeling=labeling_residuals)
+
+MOSA(~age+area, A0)
+```
+
+
+##### 年齡區隔特徵
+```{r}
+A0 %>% group_by(age) %>% summarise(
+  Group.Size = n(),              # 族群人數
+  avg.Freq = mean(f),            # 平均購買次數
+  avg.Revenue = sum(f*m)/sum(f)  # 平均客單價
+  ) %>% 
+  ggplot(aes(y=avg.Freq, x=avg.Revenue)) +
+  geom_point(aes(col=age, size=Group.Size), alpha=0.5) +
+  geom_text(aes(label=age)) +
+  scale_size(range=c(5,25)) +
+  theme_bw() + theme(legend.position="none") +
+  ggtitle("年齡區隔特徵 (泡泡大小:族群人數)") + 
+  ylab("平均購買次數") + xlab("平均客單價")
+```
+```{r}
+mean(A0$age == "a99")
+```
+**由於a99(沒有年齡資料的顧客)人數不多，而且特徵很獨特，探索時我們可以考慮濾掉這群顧客**
+
+```{r}
+A0 %>% filter(age!="a99") %>%    # 濾掉沒有年齡資料的顧客('a99')
+  group_by(age) %>% summarise(
+  Group.Size = n(),              # 族群人數
+  avg.Freq = mean(f),            # 平均購買次數
+  avg.Revenue = sum(f*m)/sum(f)  # 平均客單價
+  ) %>% 
+  ggplot(aes(y=avg.Freq, x=avg.Revenue)) +
+  geom_point(aes(col=age, size=Group.Size), alpha=0.5) +
+  geom_text(aes(label=age)) +
+  scale_size(range=c(5,25)) +
+  theme_bw() + theme(legend.position="none") +
+  ggtitle("年齡區隔特徵 (泡泡大小:族群人數)") + 
+  ylab("平均購買次數") + xlab("平均客單價")
+```
+
+##### 地理區隔特徵
+```{r}
+A0 %>% filter(age!="a99") %>%    # 濾掉沒有年齡資料的顧客('a99')
+  group_by(area) %>% summarise(
+  Group.Size = n(),              # 族群人數
+  avg.Freq = mean(f),            # 平均購買次數
+  avg.Revenue = sum(f*m)/sum(f)  # 平均客單價
+  ) %>% 
+  ggplot(aes(y=avg.Freq, x=avg.Revenue)) +
+  geom_point(aes(col=area, size=Group.Size), alpha=0.5) +
+  geom_text(aes(label=area)) +
+  scale_size(range=c(5,25)) +
+  theme_bw() + theme(legend.position="none") +
+  ggtitle("地理區隔特徵 (泡泡大小:族群人數)") + 
+  ylab("平均購買次數") + xlab("平均客單價")
+```
+<br><hr>
+
+##### 主要分析
+※ 「年齡」與「地區」之間有很高的關聯性  
+    § 南港(z115)30~40歲的顧客比率比較低  
+    § 汐止(z221)、內湖(z114)和其他(zOthers)30~40歲的顧客比率比較高  
+  
+※ 「平均購買次數」和「平均客單價」之間有明顯的負相關  
+    § 住的遠(近)的人比較少(常)來買、但每一次買的比較多(少)  
+    § 30~40歲(年輕和年長)的人比較少(常)來買、但每一次買的比較多(少)  
+
+
+##### 品類和年齡、地區的關聯性
+```{r}
+top20 = tapply(Z0$qty,Z0$cat,sum) %>% sort %>% tail(20) %>% names
+```
+
+```{r}
+MOSA(~age+cat, Z0[Z0$cat %in% top20,])
+```
+```{r}
+MOSA(~cat+area, Z0[Z0$cat %in% top20,])
+```
+  
+**不同年齡、地區的顧客喜歡買的品類看來也不太一樣**
+ 
+
+##### 周末與周間
+```{r}
+X0$wday = format(X0$date, "%u")
+par(cex=0.7, mar=c(2,3,2,1))
+table(X0$wday) %>% barplot(main="No. Transactions in Week Days")
+```
+  
+##### 年齡與購物日的關聯性
+```{r}
+MOSA(~age+wday, X0)
+```
+```{r}
+df = Z0 %>% filter(cat %in% top20) %>% mutate(wday = format(date, '%u'))
+MOSA(~cat+wday, df)
+```
+
+##### 品類分析
+- 獲利貢獻(profit)最大的100個品類(cat)
+```{r}
+col6 = c('seagreen','gold','orange',rep('red',3))
+gg= group_by(Z0, cat) %>% summarise(
+  solds = n(), qty = sum(qty), rev = sum(price), cost = sum(cost), 
+  profit = rev - cost, margin = 100*profit/rev
+  ) %>% 
+  top_n(100, profit) %>% 
+  ggplot(aes(x=margin, y=rev, col=profit, label=cat)) + 
+  geom_point(size=2,alpha=0.8) + scale_y_log10() + 
+  scale_color_gradientn(colors=col6) +
+  theme_bw()
+ggplotly(gg)
+```
+
+<br><hr>
+### 5.行銷策略擬定
+**背景**    
+我們假設這家量販店大北百貨開設在汐止與南港等地區，而較多的顧客年齡都落在30-44歲，並且喜歡在周末時造訪，考量到此消費族群人數較多與購買平均客單價最高，因此我們將此訂為我們的TA
+
+由上面馬賽克圖得知，可發現南港30-40歲的消費客群人數較低，所以我們將行銷目標訂為「提升南港地區30-40歲顧客比率」 ，而我們推測造成這樣的現象可能有以下**四點原因**:
+
+1. 產品組合或產品販售方式不夠吸引人
+2. 店面地理位置不易到達
+3. 附近可能有其他同業競爭對手
+4. 分店資訊較少人知曉
+
+**針對第一點原因本組預計透過分析「產品組合」，進一步提出的策略:**
+
+- 銷售量最高的產品 > 明星熱銷商品組：選出品牌熱銷商品進行販售，以「明星暢銷商品」、「銷售冠軍商品」等等的組合名稱吸引消費者。
+- 賣不出去的商品 > 搭配贈品：由於新品是消費者較不熟悉的產品，要提高大家的下單意願，可以透過贈送一些目標消費者群（TA) -
+- 有興趣的東西當贈品，去吸引消費者購入。
+- 與特色品牌（例如小農品牌、星級飯店等等）合作，推出大北百貨(南港店)專屬聯名商品，增加消費者的購物選擇
+舉辦親子活動ex ：小小店長或是親子DIY吸引小家庭來訪
+
+**針對第二點原因我們提出以下的策略:**
+- 因為此族群多為假日消費、開車、家庭採購，我們推論在南港地區的店家周邊可能有停車位不足的問題，所以認為可以跟附近停車場合作，藉由增加停車位解決店面不易到達問題
+
+**針對第三、四點原因，我們提出以下策略:**
+- 與附近五公里的店家進行聯盟行銷
+- 開設粉絲專業、成立社群推播優惠資訊
