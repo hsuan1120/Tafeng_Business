@@ -1,8 +1,9 @@
 ---
-title: Midterm_project 
-author: 林育萱
+title: "Midterm_project"
+author: "林育萱"
 date: "`r Sys.time()`"
 output:
+  pdf_document: default
   html_document:
     highlight: pygments
     theme: flatly
