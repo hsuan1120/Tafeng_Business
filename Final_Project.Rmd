@@ -1,0 +1,855 @@
+---
+title: "Final_Project"
+author: "Shelly Lin"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    highlight: pygments
+    theme: flatly
+    css: style.css
+---
+<br>
+
+### 專案說明
+1. 對經營現況進行說明。
+2. 對選擇的目標客群進行預測，像是每位顧客的回購機率、預期營收、預期獲利以及終生價值。
+3. 利用行銷工具說明如何提升或是維持客群的特點，並瞭解透過此工具的所得到預期的總效益。
+
+
+### 資料彙整流程
+
+<center>
+![Fig-1:交易資料彙整](fig/aggregation.jpg)
+
+</center>
+
+<hr>
+
+### 1.交易項目紀錄:Z
+```{r setup, echo=T, message=F, cache=F, warning=F}
+rm(list=ls(all=T))
+knitr::opts_chunk$set(paged.print=FALSE, comment = NA)
+pacman::p_load(magrittr, readr, caTools, ggplot2, dplyr, vcd,plotly,tidyr,latex2exp,Matrix)
+```
+
+
+##### 讀進資料
+```{r}
+Z = read_csv("data/ta_feng_all_months_merged.csv") %>% 
+  data.frame %>% setNames(c(
+    "date","cust","age","area","cat","prod","qty","cost","price"))
+```
+```{r}
+nrow(Z)
+```
+```{r}
+tibble(Z)
+```
+
+##### 日期格式轉換
+```{r fig.height=3.2, fig.width=7}
+Z$date = as.Date(Z$date, format="%m/%d/%Y")
+par(cex=0.8)
+hist(Z$date,'weeks',freq=T,las=2)
+```
+
+##### 年齡層級、郵遞區號  
+瞭解顧客的年齡客群與分布地區
+```{r}
+age.group = c("<25","25-29","30-34","35-39","40-44",
+              "45-49","50-54","55-59","60-64",">65")
+Z$age = c(paste0("a",seq(24,69,5)),"a99")[match(Z$age,age.group,11)]
+Z$area = paste0("z",Z$area)
+```
+
+<center>
+![Fig-2:郵遞區號](fig/zipcode.png)
+</center>
+
+```{r fig.height=2.5, fig.width=7}
+par(mfrow=c(1,2),cex=0.7)
+table(Z$age, useNA='ifany') %>% barplot(main="Age Groups", las=2)
+table(Z$area,useNA='ifany') %>% barplot(main="Areas", las=2)
+```
+  
+經由上圖可以發現顧客年齡多為29-44為主，而區域則是z115(南港)與z221(汐止)為主。  
+
+
+##### 處理離群值
+```{r}
+# Quantile of Variables
+sapply(Z[,7:9], quantile, prob=c(.99, .999, .9995))
+```
+```{r}
+# Remove Outliers
+Z = subset(Z, qty<=24 & cost<=3800 & price<=4000) 
+nrow(Z)  
+```
+
+##### 彙總訂單  
+把每一天、每一個顧客的交易項目彙總為一張訂單
+```{r}
+Z$tid = group_indices(Z, date, cust) # same customer same day
+```
+##### 資料總覽
+```{r}
+# No. cust, cat, prod, tid
+sapply(Z[c("cust","cat","prod","tid")], n_distinct)
+```
+
+### 2.交易紀錄:X
+##### 交易資料彙整
+```{r}
+X = Z %>% group_by(tid) %>% summarise(
+  date = min(date),          # 交易日期  
+  cust = min(cust),          # 顧客 ID
+  age = min(age),            # 顧客 年齡級別
+  area = min(area),          # 顧客 居住區別
+  items = n(),               # 交易項目(總)數
+  pieces = sum(qty),         # 產品(總)件數
+  total = sum(price),        # 交易(總)金額
+  gross = sum(price - cost)  # 毛利
+) %>% data.frame
+nrow(X)
+```
+##### 處理離群值
+```{r}
+# Check Quantile & Remove Outliers
+sapply(X[,6:9], quantile, prob=c(.999, .9995, .9999))
+```
+
+```{r}
+# Remove Outliers
+X = subset(X, items<=62 & pieces<95 & total<16000) # 119328
+```
+
+##### 交易摘要
+```{r}
+summary(X) 
+```
+
+##### 每周交易次數
+```{r}
+par(cex=0.8)
+hist(X$date, "weeks", freq=T, las=2, main="No. Transaction per Week")
+```
+
+### 3.顧客資料:A
+##### 顧客資料彙整
+```{r}
+d0 = max(X$date) + 1
+A = X %>% mutate(
+  days = as.integer(difftime(d0, date, units="days"))
+  ) %>% group_by(cust) %>% summarise(
+    TID = min(tid),
+    r = min(days),      # recency
+    s = max(days),      # seniority
+    f = n(),            # frquency
+    m = mean(total),    # monetary
+    rev = sum(total),   # total revenue contribution
+    raw = sum(gross),   # total gross profit contribution
+    age = min(age),     # age group
+    area = min(area),   # area code
+  ) %>% data.frame      
+nrow(A) # 32241
+```
+
+```{r}
+par(mfrow=c(1,2),cex=0.7)
+table(A$age, useNA='ifany') %>% barplot(main="Age Groups",las=2)
+table(A$area, useNA='ifany') %>% barplot(main="Areas",las=2)    
+```
+
+
+##### 顧客摘要
+```{r}
+summary(A) 
+```
+
+```{r}
+par(mfrow=c(3,2), mar=c(3,3,4,2))
+for(x in c('r','s','f','m')) 
+  hist(A[,x],freq=T,main=x,xlab="",ylab="",cex.main=2)
+hist(pmin(A$f,10),0:10,freq=T,xlab="",ylab="",cex.main=2)
+hist(log(A$m,10),freq=T,xlab="",ylab="",cex.main=2)
+```
+
+##### 4.Check & Save  
+將剛剛處理完的資料全部重新儲存。  
+```{r}
+is.na(Z) %>% colSums
+```
+
+```{r}
+is.na(X) %>% colSums
+```
+
+```{r}
+is.na(A) %>% colSums
+```
+
+```{r}
+A0 = A; X0 = X; Z0 = Z
+save(Z0, X0, A0, file="data/tf0.rdata")
+```
+
+##### 類別資料的分類統計
+```{r}
+mosaic(~area+age, data=A, shade=T)
+```
+
+由於a99(沒有年齡資料的顧客)人數不多，而且特徵很獨特，探索時我們可以考慮濾掉這群顧客
+```{r}
+A0 %>% filter(age!="a99") %>%    # 濾掉沒有年齡資料的顧客('a99')
+  group_by(age) %>% summarise(
+  TID = min(TID),
+  Group.Size = n(),              # 族群人數
+  avg.Freq = mean(f),            # 平均購買次數
+  avg.Revenue = sum(f*m)/sum(f)  # 平均客單價
+  ) %>% 
+  ggplot(aes(y=avg.Freq, x=avg.Revenue)) +
+  geom_point(aes(col=age, size=Group.Size), alpha=0.5) +
+  geom_text(aes(label=age)) +
+  scale_size(range=c(5,25)) +
+  theme_bw() + theme(legend.position="none") +
+  ggtitle("年齡區隔特徵 (泡泡大小:族群人數)") + 
+  ylab("平均購買次數") + xlab("平均客單價")
+```
+經上面的泡泡圖顯示，平均客單價較高的客群為a34與a39。
+
+##### 地理區隔特徵
+```{r}
+A0 %>% filter(age!="a99") %>%    # 濾掉沒有年齡資料的顧客('a99')
+  group_by(area) %>% summarise(
+  TID = min(TID),
+  Group.Size = n(),              # 族群人數
+  avg.Freq = mean(f),            # 平均購買次數
+  avg.Revenue = sum(f*m)/sum(f)  # 平均客單價
+  ) %>% 
+  ggplot(aes(y=avg.Freq, x=avg.Revenue)) +
+  geom_point(aes(col=area, size=Group.Size), alpha=0.5) +
+  geom_text(aes(label=area)) +
+  scale_size(range=c(5,25)) +
+  theme_bw() + theme(legend.position="none") +
+  ggtitle("地理區隔特徵 (泡泡大小:族群人數)") + 
+  ylab("平均購買次數") + xlab("平均客單價")
+```
+
+故綜上面顯示的兩張泡泡圖分析，我們將年齡與地區作為我們的TA篩選條件。
+首先，我們先選出了a34與a39的合併組合，因為從第一張泡泡圖可看出此組合的平均客單價為最高，故此組合為一個可利用行銷而提高收益的對象。
+
+再來，我們依地區分布再選出了z115與z221，而理由是z115在上述的年齡組合的消費人數較少，我們希望利用行銷手法來拓展潛在客群，並且提升在Z115的消費人數;z221地區則在上述年齡的組合的消費人數較高，故我們希望將此常客族群繼續留住，再提高他們對TaFeng的忠誠度。
+
+```{r}
+z221_cu = subset(A0, area == "z221" & (age == "a34" | age == "a39"))#3653人
+```
+
+```{r}
+z115_cu =subset(A0, area == "z115" &(age == "a34" | age == "a39"))#3550人
+```
+這裡將兩群TA篩選出來，而可看到兩群人數為總顧客的十分之一，有達到在行銷人數條件的標準
+
+<hr>
+
+
+### 資料整理
+<center>
+![Fig-1:交易資料彙整](fig/preparation.jpg)
+</center>
+
+### 1.製作預測變數
+1. 資料備註:    
+- Z0:原始交易項目  
+- X0:交易(每一張訂單有多個項目，含有產品種類、品項)  
+- A0:顧客    
+2.作法:    
+- 移除最後一期(分割日期之後)的資料  
+
+```{r}
+feb01 = as.Date("2001-02-01")   # 資料分割日期 
+Z = subset(Z0, date < feb01)    # 618212 項目
+```
+
+##### 1.重新匯整交易紀錄
+```{r}
+X = group_by(Z, tid) %>% summarise(
+  date = first(date),  # date of transaction
+  cust = first(cust),  # customer id
+  age = first(age),    # age group
+  area = first(area),  # area group
+  items = n(),                # number of items
+  pieces = sum(qty),          # number of pieces
+  total = sum(price),         # total amount
+  gross = sum(price - cost)   # raw profit
+  ) %>% data.frame  # 88387 交易筆數
+```
+
+```{r}
+summary(X)
+```
+
+##### 移除不合理的離群資料
+```{r}
+sapply(X[,6:9], quantile, prob=c(.999, .9995, .9999))
+```
+
+```{r}
+X = subset(X, items<=64 & pieces<=98 & total<=11260) # 88387 -> 88295
+```
+
+##### 重新匯整顧客資料
+```{r}
+d0 = max(X$date) + 1
+A = X %>% mutate(
+  days = as.integer(difftime(d0, date, units="days"))
+  ) %>% 
+  group_by(cust) %>% summarise(
+    TID = min(tid),
+    r = min(days),      # recency
+    s = max(days),      # seniority
+    f = n(),            # frequency
+    m = mean(total),    # monetary(平均客單價)
+    rev = sum(total),   # total revenue contribution(總營收貢獻)
+    raw = sum(gross),   # total gross profit contribution(總淨利貢獻)
+    age = age[1],       # age group
+    area = area[1],     # area code
+  ) %>% data.frame      # 28584 顧客
+nrow(A)
+```
+
+### 2.製作預測變數
+##### 匯整最後一期的資料
+```{r}
+feb = filter(X0, date>= feb01) %>% group_by(cust) %>% 
+  summarise(amount = sum(total))  # 16900
+```
+
+- feb$amount之中有最後一期來買過的16,900位顧客的營收貢獻    
+- 將feb$amount匯入A
+```{r}
+A = merge(A, feb, by="cust", all.x=T)
+```
+
+##### The Target for Classification - A$buy  
+- A$amount是NA代表這位顧客最後一期沒來買
+- A$amount不是NA代表這位顧客最後一期有來買過
+```{r}
+A$buy = !is.na(A$amount)  
+table(A$buy, !is.na(A$amount))
+```
+
+##### 3. 總結資料集的內容
+```{r}
+summary(A)
+```
+
+```{r}
+#z115_ca在2月的購買人數
+z115_cu_A1 = matrix(NA, nrow(z115_cu),ncol(z115_cu))
+z115_cu_A1 = A[A$TID %in% z115_cu$TID,]
+table(z115_cu_A1$buy)
+```
+依上面結果，z221(汐止)的客群在2月的購買人數為1623。  
+
+```{r}
+#z221_cu在2月的購買人數
+z221_cu_A1 = matrix(NA, nrow(z221_cu),ncol(z221_cu))
+z221_cu_A1 = A[A$TID %in% z221_cu$TID,]
+table(z221_cu_A1$buy)
+```
+依上面結果，z221(南港)的客群在2月的購買人數為1808。  
+
+<hr>
+
+### 建立模型
+<center>
+![Fig-3:建立模型](fig/modeling.jpg)
+</center>
+
+##### 1.分割訓練測試(TR)與測試資料(TS)
+Data for 購買機率模型與購買金額模型   
+- A之中每一筆資料都可以拿來做購買機率模型  
+- 但只有A$amount有值的資料可以拿來做購買金額模型 : A2  
+- A和A2都需要在相同的目標變數分佈切割成訓練測試(TR)與測試資料(TS)  
+- 我們分別用caTools::sample.split()和隨機抽樣(sample)來製作分割向量:spl，spl2  
+
+**z115的購買機率模型**
+```{r}
+#z115的購買機率模型
+z115_X1 = subset(X, cust %in% z115_cu_A1$cust & date < as.Date("2001-02-01"))
+z115_Z1 = subset(Z, cust %in% z115_cu_A1$cust & date < as.Date("2001-02-01"))
+set.seed(2018)
+z115_spl = sample.split(z115_cu_A1$buy, SplitRatio = 0.7)
+c(nrow(z115_cu_A1),sum(z115_spl),sum(!z115_spl))
+```
+
+
+```{r}
+tapply(z115_cu_A1$buy,z115_spl,mean)
+```
+
+```{r}
+cbind(z115_cu_A1, z115_spl) %>% filter(buy) %>%
+  ggplot(aes(x=log(amount))) + geom_density(aes(fill=z115_spl), alpha=0.5)
+```
+
+
+**z115的購買機率金額**
+```{r}
+z115_A2 = subset(z115_cu_A1, buy) %>% mutate_at(c("m","rev","amount"), log10)
+n = nrow(z115_A2)
+#隨機抽樣製作分割向量spl2
+set.seed(2018); z115_spl2 = 1:n %in% sample(1:n, round(0.7*n))
+c(nrow(z115_A2), sum(z115_spl2), sum(!z115_spl2))
+```
+
+```{r}
+mean(z115_spl2)
+```
+
+```{r}
+cbind(z115_A2, z115_spl2) %>% 
+  ggplot(aes(x=amount)) + geom_density(aes(fill=z115_spl2), alpha=0.5)
+```
+
+
+
+**z221購買機率模型**
+```{r}
+z221_X1 = subset(X, cust %in% z221_cu_A1$cust & date < as.Date("2001-02-01"))
+z221_Z1 = subset(Z, cust %in% z221_cu_A1$cust & date < as.Date("2001-02-01"))
+set.seed(2018)
+z221_spl = sample.split(z221_cu_A1$buy, SplitRatio = 0.7)
+c(nrow(z221_cu_A1),sum(z221_spl),sum(!z221_spl))
+```
+
+```{r}
+#TR和TS之中buy==TRUE的比例是一致的
+tapply(z221_cu_A1$buy,z221_spl,mean)
+```
+
+```{r}
+cbind(z221_cu_A1, z221_spl) %>% filter(buy) %>%
+  ggplot(aes(x=log(amount))) + geom_density(aes(fill=z221_spl), alpha=0.5)
+```
+
+**z221的購買金額模型**
+```{r}
+z221_A2 = subset(z221_cu_A1, buy) %>% mutate_at(c("m","rev","amount"), log10)
+n = nrow(z221_A2)
+#隨機抽樣製作分割向量spl2
+set.seed(2018); z221_spl2 = 1:n %in% sample(1:n, round(0.7*n))
+c(nrow(z221_A2), sum(z221_spl2), sum(!z221_spl2))
+```
+
+```{r}
+mean(z221_spl2)
+```
+
+```{r}
+cbind(z221_A2, z221_spl2) %>% 
+  ggplot(aes(x=amount)) + geom_density(aes(fill=z221_spl2), alpha=0.5)
+```
+
+##### 2.儲存做好的資料
+```{r}
+save(z115_Z1, z115_X1, z115_cu_A1, z115_spl, z115_spl2, file="data/tf_z115.rdata")
+save(z221_Z1, z221_X1, z221_cu_A1, z221_spl, z221_spl2, file="data/tf_z221.rdata")
+```
+
+
+<hr>
+### 模型與預測
+### 1.匯入剛儲存的資料
+```{r}
+load("data/tf_z115.rdata")
+load("data/tf_z221.rdata")
+```
+
+**使用spl切割機率模型的訓練(TR)與測試資料(TS)**
+
+```{r}
+z115_TR = subset(z115_cu_A1,z115_spl)
+z115_TS = subset(z115_cu_A1,!z115_spl)
+```
+
+```{r}
+z221_TR = subset(z221_cu_A1,z221_spl)
+z221_TS = subset(z221_cu_A1,!z221_spl)
+```
+
+
+### 2.購買機率模型
+
+**z115目標客群的測試資料預測** 
+```{r}
+z115_glm1 = glm(buy ~ ., z115_TR[,c(3:9,12)], family=binomial()) 
+summary(z115_glm1)
+```
+
+```{r}
+z115_pred = predict(z115_glm1, z115_TS, type = "response")
+z115_cm = table(actual = z115_TS$buy, predict = z115_pred > 0.5);z115_cm
+```
+
+```{r}
+z115_acc.ts = z115_cm %>% {sum(diag(.))/sum(.)}
+c(1-mean(z115_TS$buy) , z115_acc.ts)  # 0.6880734 
+```
+
+```{r}
+colAUC(z115_pred, z115_TS$buy)  #辨識率達0.7513722
+```
+
+**z221目標客群的測試資料預測**  
+```{r}
+z221_glm1 = glm(buy ~ ., z221_TR[,c(3:9,12)], family=binomial()) 
+summary(z221_glm1)
+```
+
+```{r}
+z221_pred = predict(z221_glm1, z221_TS, type = "response")
+z221_cm = table(actual = z221_TS$buy, predict = z221_pred > 0.5);z221_cm
+```
+
+```{r}
+z221_acc.ts = z221_cm %>% {sum(diag(.))/sum(.)}
+c(1-mean(z221_TS$buy) , z221_acc.ts)  # 0.6776567 
+```
+
+```{r}
+colAUC(z221_pred, z221_TS$buy)  #辨識率達0.7369989
+```
+
+
+### 3.購買金額模型
+
+**z115客群預測未來購買金額**
+```{r}
+z115_A2 = subset(z115_cu_A1, z115_cu_A1$buy) %>% mutate_at(c("m","rev","amount"), log10)
+z115_TR2 = subset(z115_A2, z115_spl2)
+z115_TS2 = subset(z115_A2, !z115_spl2)
+```
+
+```{r}
+z115_lm1 = lm(amount ~ ., z115_TR2[,c(3:9,11)])
+summary(z115_lm1)
+```
+
+```{r}
+z115_r2.tr = summary(z115_lm1)$r.sq
+z115_SST = sum((z115_TS2$amount - mean(z115_TR2$amount))^ 2)
+z115_SSE = sum((predict(z115_lm1, z115_TS2) -  z115_TS2$amount)^2)
+z115_r2.ts = 1 - (z115_SSE/z115_SST)
+c(z115_R2train=z115_r2.tr, z115_R2test=z115_r2.ts)#模型可以解釋testing dataset 將近2成的變異
+```
+
+**z221客群預測未來購買金額**
+```{r}
+z221_A2 = subset(z221_cu_A1, z221_cu_A1$buy) %>% mutate_at(c("m","rev","amount"), log10)
+z221_TR2 = subset(z221_A2, z221_spl2)
+z221_TS2 = subset(z221_A2, !z221_spl2)
+```
+
+```{r}
+z221_lm1 = lm(amount ~ ., z221_TR2[,c(3:9,11)])
+summary(z221_lm1)
+```
+
+```{r}
+z221_r2.tr = summary(z221_lm1)$r.sq
+z221_SST = sum((z221_TS2$amount - mean(z221_TR2$amount))^ 2)
+z221_SSE = sum((predict(z221_lm1, z221_TS2) -  z221_TS2$amount)^2)
+z221_r2.ts = 1 - (z221_SSE/z221_SST)
+c(z221_R2train=z221_r2.tr, z221_R2test=z221_r2.ts)#模型可以解釋testing dataset 將近2成的變異
+```
+
+### 4.預測未來顧客行為
+```{r}
+load("data/tf0.rdata")
+d0 = max(X0$date) + 1
+B = X0 %>% 
+  filter(date >= as.Date("2000-12-01")) %>% 
+  mutate(days = as.integer(difftime(d0, date, units="days"))) %>% 
+  group_by(cust) %>% summarise(
+    r = min(days),      # recency
+    s = max(days),      # seniority
+    f = n(),            # frequency
+    m = mean(total),    # monetary
+    rev = sum(total),   # total revenue contribution
+    raw = sum(gross),   # total gross profit contribution
+    age = age[1],       # age group
+    area = area[1],     # area code
+    TID = min(tid)
+  ) %>% data.frame      # 28531
+nrow(B)
+```
+```{r}
+z115_B = matrix(NA, nrow(z115_cu),ncol(z115_cu))
+z115_B = B[B$TID %in% z115_cu$TID,]
+```
+
+
+```{r}
+z221_B = matrix(NA, nrow(z221_cu),ncol(z221_cu))
+z221_B = B[B$TID %in% z221_cu$TID,]
+```
+
+
+##### 3月份來買的機率
+**z115購買機率**
+```{r}
+z115_B$Buy = predict(z115_glm1, z115_B, type="response")#3月份來買的機率
+```
+
+```{r}
+z115_B2 = z115_B %>% mutate_at(c("m","rev"), log10)
+z115_B$Rev = 10^predict(z115_lm1, z115_B2)
+#"m","rev"兩個變數和目標變數取log
+#"rev"為預期購買金額
+par(mfrow=c(1,2), cex=0.8)
+hist(z115_B$Buy)
+hist(log(z115_B$Rev,10))
+```
+
+```{r}
+save(z115_B, file='data/tf4_z115.rdata')
+```
+
+**z221購買機率**
+```{r}
+z221_B$Buy = predict(z221_glm1, z221_B, type="response")
+```
+
+```{r}
+z221_B2 = z221_B %>% mutate_at(c("m","rev"), log10)
+z221_B$Rev = 10^predict(z221_lm1, z221_B2)
+#"m","rev"兩個變數和目標變數取log
+#"rev"為預期購買金額
+par(mfrow=c(1,2), cex=0.8)
+hist(z221_B$Buy)
+hist(log(z221_B$Rev,10))
+```
+
+```{r}
+save(z221_B, file='data/tf4_z221.rdata')
+```
+
+
+### 顧客終身價值計算  
+接著透過計算顧客終生價值瞭解每一個顧客的潛在價值有多大。
+![Fig-3:CLV](fig/CLV.png)
+
+##### z115客群的未來3年的終身價值
+```{r}
+g = 0.3   # margin
+N = 36    # period(一期一個月)
+d = 0.01  # interest rate
+z115_B$CLV = g * z115_B$Rev * rowSums(sapply(
+  0:N, function(i) (z115_B$Buy/(1+d))^i ) )
+
+summary(z115_B$CLV)#該顧客的終生價值，未來3年的營收貢獻
+```
+
+```{r}
+ggplot(z115_B, aes(CLV)) + 
+  geom_histogram(bins=30, fill="green",alpha=0.6) + 
+  scale_x_log10()
+```
+
+##### z221客群的未來3年的終身價值
+```{r}
+g = 0.3   # margin
+N = 36    # period(一期一個月)
+d = 0.01  # interest rate
+z221_B$CLV = g * z221_B$Rev * rowSums(sapply(
+  0:N, function(i) (z221_B$Buy/(1+d))^i ) )
+
+summary(z221_B$CLV)#該顧客的終生價值，未來3年的營收貢獻
+```
+
+```{r}
+ggplot(z221_B, aes(CLV)) + 
+  geom_histogram(bins=30, fill="green",alpha=0.6) + 
+  scale_x_log10()
+```
+
+### 帶參數的假設
+**S曲線**  
+- S-Curve : 許多管理工具都呈現S型的成本效益函數  
+- 以R內建的邏輯式函數(plogis())來模擬S曲線
+$$\Delta P(x|m,b,a) = m \cdot Logis(\frac{10(x - b)}{a})$$
+
+```{r}
+DP = function(x,m0,b0,a0) {m0*plogis((10/a0)*(x-b0))}
+par(mar=c(4,4,2,1),cex=0.7)
+curve(DP(x,m=0.20,b=30,a=40), 0, 60, lwd=2, ylim=c(0, 0.25),
+      main="F( x | m=0.2, b=30, a=40 )", ylab="delta P")
+abline(h=seq(0,0.2,0.05),v=seq(0,60,5),col='lightgrey',lty=2)
+```
+
+![Fig-44:CLV](fig/EffectFunition.png)
+**透過這3個parameters(參數):**
+
+- m : 最大效果
+- b : 效果的位置(上升波段的中點)
+- a : 效果的範圍(上升波段的寬度)    
+我們可以寫『一支程式』來模擬『所有可能』的成本效益函數(S曲線),藉以描述策略變數(x,折價卷面額)和策略效果(ΔP,購買機率增幅)之間的關係
+
+##### 估計預期獲利
+有了行銷工具的成本效益函數之後，我們就可以估計將這個工具用在每一位顧客上的時候的預期效益:  
+
+$$\hat{R}(x) = \left\{\begin{matrix}
+\Delta P \cdot M \cdot margin - x & , & P + \Delta P \leq 1\\ 
+(1-P) \cdot M \cdot margin - x & , & else 
+\end{matrix}\right.$$
+
+結合以下， 
+- 預測 ($P, M$) : 每位顧客的預期購買機率和購買金額，
+- 假設 ($\Delta P(x|m,b,a)$) : 行銷工具帶來的再購機率增額
+我們就可以估計這個工具用在每位顧客上的預期效益 $\hat{R}(x)$。 
+
+
+🌻 注意$\Delta P$ 和 $\hat{R}$ 都是藉由函數 $x$ 的 $m,b,a$ 所得到
+
++ $P, M$ 預期購買機率和金額，是<z>預測</z>
++ $m, b, a$ 行銷工具的屬性，是<z>假設</z>
++ $x$ 行銷強度，是我們可以操作的、想要優化的<z>策略變數</z>
+
+##### 估計毛利率 m
+```{r}
+margin = 0.17  # assume margin = 0.17
+```
+
+##### 估計每位顧客的淨收益
+
+**z221客群的淨收益**
+```{r}
+#z115族客群的示意圖(改mba)
+m=0.25; b=20; a=30; x=27
+z115_dp = pmin(1-z115_B$Buy, DP(x,m,b,a))
+z115_eR = z115_dp*z115_B$Rev*margin - x
+hist(z115_eR,main="TA1預期淨收益分佈(m=0.20; b=20; a=30;x=27)",xlab="z115_a3439預期淨收益",ylab="z115_a3439顧客人數")
+```
+
+
+**z221客群的淨收益**
+```{r}
+#z221族群的示意圖(改mba)
+m=0.2; b=20; a=30; x=27
+z221_dp = pmin(1-z221_B$Buy, DP(x,m,b,a))
+z221_eR = z221_dp*z221_B$Rev*margin - x
+hist(z221_eR,main="TA2預期淨收益分佈(m=0.20; b=20; a=30;x=27)",xlab="z221_a3439預期淨收益",ylab="z221_a3439顧客人數")
+```
+
+### 市場模擬
+一個行銷工具給定工具參數(m,b,a)，我們可在其有效成本範圍(x∈[b−a2,b+a2] )之內，估計工具的效果：
+- eReturn : 對所有的人行銷的總預期收益 
+- N : 預期收益大於零的人數
+- eReturn2 : 只對期收益大於零的人做行銷的總預期收益如何隨成本變化。
+
+##### 基本折價券、累點行銷工具模擬
+```{r}
+mm=c(0.15, 0.25)
+bb=c(  10,   25)
+aa=c(  20,   30)
+X = seq(0,60,2) 
+do.call(rbind, lapply(1:length(mm), function(i) data.frame(
+  Inst = ifelse(i == 1, "折價券", "累點"), Cost=X, 
+  Gain=DP(X,mm[i],bb[i],aa[i])
+  ))) %>% data.frame %>% 
+  ggplot(aes(x=Cost, y=Gain, col=Inst)) +
+  geom_line(size=1.5,alpha=0.5) + theme_bw() +
+  ggtitle("Prob. Function: f(x|m,b,a)")
+```
+
+##### 工具模擬對於z115的效果
+```{r}
+mm=c(0.2, 0.25)
+bb=c(  20,   20)
+aa=c(  30,   20)
+X = seq(0,60,2) 
+do.call(rbind, lapply(1:length(mm), function(i) data.frame(
+  Inst = ifelse(i == 1, "折價券", "累點"), Cost=X, 
+  Gain=DP(X,mm[i],bb[i],aa[i])
+  ))) %>% data.frame %>% 
+  ggplot(aes(x=Cost, y=Gain, col=Inst)) +
+  geom_line(size=1.5,alpha=0.5) + theme_bw() +
+  ggtitle("Prob. Function: f(x|m,b,a)")
+```
+
+
+```{r}
+X = seq(10, 60, 1) 
+df = do.call(rbind, lapply(1:length(mm), function(i) {
+  sapply(X, function(x) {
+    z115_dp = pmin(1-z115_B$Buy, DP(x,mm[i],bb[i],aa[i]))
+    z115_eR = z115_dp*z115_B$Rev*margin - x
+    c(i=i, x=x, z115_eR.ALL=sum(z115_eR), N=sum(z115_eR>0), z115_eR.SEL=sum(z115_eR[z115_eR > 0]) )
+    }) %>% t %>% data.frame
+  })) 
+
+df %>% 
+  mutate_at(vars(z115_eR.ALL, z115_eR.SEL), function(y) round(y/1000)) %>% 
+  gather('key','value',-i,-x) %>% 
+  mutate(Inst = ifelse(i == 1, "折價券", "累點")) %>%
+  ggplot(aes(x=x, y=value, col=Inst)) + 
+  geom_hline(yintercept=0, linetype='dashed', col='blue') +
+  geom_line(size=1.5,alpha=0.5) + 
+  xlab('工具選項(成本)') + ylab('預期收益($K)') + 
+  ggtitle('行銷工具優化','假設行銷工具的效果是其成本的函數') +
+    facet_wrap(~key,ncol=1,scales='free_y') + theme_bw() -> p
+
+plotly::ggplotly(p)
+```
+
+
+```{r}
+group_by(df, i) %>% top_n(1,z115_eR.SEL)
+```
+##### 工具模擬對於z221的效果
+```{r}
+mm=c(0.25, 0.2)
+bb=c(  15,   25)
+aa=c(  20,   30)
+X = seq(0,60,2) 
+do.call(rbind, lapply(1:length(mm), function(i) data.frame(
+  Inst = ifelse(i == 1, "折價券", "累點"), Cost=X, 
+  Gain=DP(X,mm[i],bb[i],aa[i])
+  ))) %>% data.frame %>% 
+  ggplot(aes(x=Cost, y=Gain, col=Inst)) +
+  geom_line(size=1.5,alpha=0.5) + theme_bw() +
+  ggtitle("Prob. Function: f(x|m,b,a)")
+```
+
+```{r}
+X = seq(10, 60, 1) 
+df = do.call(rbind, lapply(1:length(mm), function(i) {
+  sapply(X, function(x) {
+    z221_dp = pmin(1-z221_B$Buy, DP(x,mm[i],bb[i],aa[i]))
+    z221_eR = z221_dp*z221_B$Rev*margin - x
+    c(i=i, x=x, z221_eR.ALL=sum(z221_eR), N=sum(z221_eR>0), z221_eR.SEL=sum(z221_eR[z221_eR > 0]) )
+    }) %>% t %>% data.frame
+  })) 
+
+df %>% 
+  mutate_at(vars(z221_eR.ALL, z221_eR.SEL), function(y) round(y/1000)) %>% 
+  gather('key','value',-i,-x) %>% 
+  mutate(Inst = ifelse(i == 1, "折價券", "累點")) %>%
+  ggplot(aes(x=x, y=value, col=Inst)) + 
+  geom_hline(yintercept=0, linetype='dashed', col='blue') +
+  geom_line(size=1.5,alpha=0.5) + 
+  xlab('工具選項(成本)') + ylab('預期收益($K)') + 
+  ggtitle('行銷工具優化','假設行銷工具的效果是其成本的函數') +
+    facet_wrap(~key,ncol=1,scales='free_y') + theme_bw() -> p
+
+plotly::ggplotly(p)
+```
+
+
+### 最後結果
+根據預期的總效益顯示，有了以下的行銷策略:  
+1. 集點加購送鍋具適用於z115(南港)的客群，總觸及人數有962人，預期效益為17144。
+2. 滿千送95折折價券(規定於下次使用)則適用於z221的客群(汐止區)，總觸及會有1352人，預期效益30366。   
+故總觸及人數會有2314人，總結效益為47510。
+
