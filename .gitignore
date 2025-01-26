@@ -8,6 +8,11 @@
 
 # User-specific files
 .Ruserdata
+data/
+fig/
+Final_Project.tex
+Midterm_Project.tex
+style.css
 
 # Example code in package build process
 *-Ex.R
