@@ -1,9 +1,8 @@
 ---
-title: "Midterm_project"
-author: "林育萱"
+title: "Midterm_Project"
+author: "Shelly Lin"
 date: "`r Sys.time()`"
 output:
-  pdf_document: default
   html_document:
     highlight: pygments
     theme: flatly
